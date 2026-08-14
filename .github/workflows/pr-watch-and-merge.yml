@@ -63,10 +63,8 @@ jobs:
             --head "$HEAD_BRANCH" \
             --title 'chore(ci): verify PR checks watcher' \
             --body 'Created by the PR checks watcher verification workflow.')"
-          head_sha="$(gh pr view "$pr_url" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)"
 
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
-          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
 
       - name: Wait for required checks
         shell: bash
@@ -80,14 +78,6 @@ jobs:
           # gh pr checks "$PR_URL" --repo "$GITHUB_REPOSITORY" --required --watch --interval 5
 
       - name: Attempt merge before required checks finish (expected to fail)
-        shell: bash
         env:
           PR_URL: ${{ steps.pull_request.outputs.url }}
-          HEAD_SHA: ${{ steps.pull_request.outputs.head_sha }}
-        run: |
-          set -euo pipefail
-          gh pr merge "$PR_URL" \
-            --repo "$GITHUB_REPOSITORY" \
-            --squash \
-            --delete-branch \
-            --match-head-commit "$HEAD_SHA"
+        run: gh pr merge "$PR_URL" --merge
