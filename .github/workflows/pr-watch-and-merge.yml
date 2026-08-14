@@ -82,7 +82,8 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
-          # gh pr checks "$PR_URL" --repo "$GITHUB_REPOSITORY" --required --watch --interval 5
+          sleep 10
+          gh pr checks "$PR_URL" --repo "$GITHUB_REPOSITORY" --required --watch --interval 5
 
       - name: Merge after required checks pass
         shell: bash
