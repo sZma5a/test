@@ -72,12 +72,26 @@ jobs:
           PR_URL: ${{ steps.pull_request.outputs.url }}
         run: |
           set -euo pipefail
-          # Intentionally disabled for the first verification run. With dummy-ci
-          # configured as a required check, the following merge must fail while
-          # that check is still pending.
-          # gh pr checks "$PR_URL" --repo "$GITHUB_REPOSITORY" --required --watch --interval 5
+          gh pr checks "$PR_URL" --repo "$GITHUB_REPOSITORY" --required --watch --interval 5
 
-      - name: Attempt merge before required checks finish (expected to fail)
+      - name: Merge after required checks pass
+        shell: bash
         env:
           PR_URL: ${{ steps.pull_request.outputs.url }}
-        run: gh pr merge "$PR_URL" --merge
+        run: |
+          set -euo pipefail
+
+          for _ in {1..10}; do
+            merge_state="$(gh pr view "$PR_URL" --json mergeStateStatus --jq .mergeStateStatus)"
+            if [[ "$merge_state" == "BLOCKED" ]]; then
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ "$merge_state" != "BLOCKED" ]]; then
+            echo "GitHub did not report a blocked merge state: $merge_state"
+            exit 1
+          fi
+
+          gh pr merge "$PR_URL" --merge
