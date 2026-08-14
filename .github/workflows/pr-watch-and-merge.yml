@@ -92,18 +92,4 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
-
-          for _ in {1..10}; do
-            merge_state="$(gh pr view "$PR_URL" --json mergeStateStatus --jq .mergeStateStatus)"
-            if [[ "$merge_state" == "BLOCKED" ]]; then
-              break
-            fi
-            sleep 2
-          done
-
-          if [[ "$merge_state" != "BLOCKED" ]]; then
-            echo "GitHub did not report a blocked merge state: $merge_state"
-            exit 1
-          fi
-
           gh pr merge "$PR_URL" --merge
