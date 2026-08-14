@@ -1,0 +1,93 @@
+name: Create PR, watch checks, and merge
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_branch:
+        description: Test branch to create before opening the pull request
+        required: true
+        default: test1
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create-watch-and-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASE_BRANCH: main
+      TEST_BRANCH: ${{ inputs.test_branch }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out the base branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Write a random value to test.txt and push the test branch
+        id: branch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          branch="$TEST_BRANCH"
+          git fetch origin "$BASE_BRANCH"
+          git checkout -B "$branch" "origin/$BASE_BRANCH"
+
+          openssl rand -hex 16 > test.txt
+          git add test.txt
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m 'chore(ci): update test marker'
+          git push --set-upstream origin "$branch"
+
+          echo "name=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Create a pull request
+        id: pull_request
+        shell: bash
+        env:
+          HEAD_BRANCH: ${{ steps.branch.outputs.name }}
+        run: |
+          set -euo pipefail
+
+          pr_url="$(gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base "$BASE_BRANCH" \
+            --head "$HEAD_BRANCH" \
+            --title 'chore(ci): verify PR checks watcher' \
+            --body 'Created by the PR checks watcher verification workflow.')"
+          head_sha="$(gh pr view "$pr_url" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)"
+
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for required checks
+        shell: bash
+        env:
+          PR_URL: ${{ steps.pull_request.outputs.url }}
+        run: |
+          set -euo pipefail
+          # Intentionally disabled for the first verification run. With dummy-ci
+          # configured as a required check, the following merge must fail while
+          # that check is still pending.
+          # gh pr checks "$PR_URL" --repo "$GITHUB_REPOSITORY" --required --watch --interval 5
+
+      - name: Attempt merge before required checks finish (expected to fail)
+        shell: bash
+        env:
+          PR_URL: ${{ steps.pull_request.outputs.url }}
+          HEAD_SHA: ${{ steps.pull_request.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_URL" \
+            --repo "$GITHUB_REPOSITORY" \
+            --squash \
+            --delete-branch \
+            --match-head-commit "$HEAD_SHA"
