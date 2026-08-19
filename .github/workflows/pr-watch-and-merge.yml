@@ -1,10 +1,14 @@
 name: Create PR, watch checks, and merge
 
 on:
+  push:
+    # Limit push-triggered runs to workflow changes to avoid a merge loop.
+    paths:
+      - .github/workflows/pr-watch-and-merge.yml
   workflow_dispatch:
     inputs:
       test_branch:
-        description: Test branch to create before opening the pull request
+        description: Prefix for the test branch created before opening the pull request
         required: true
         default: test1
         type: string
@@ -19,7 +23,7 @@ jobs:
     timeout-minutes: 15
     env:
       BASE_BRANCH: main
-      TEST_BRANCH: ${{ inputs.test_branch }}
+      TEST_BRANCH_PREFIX: ${{ inputs.test_branch || 'test1' }}
 
     steps:
       - name: Generate GitHub App token
@@ -29,38 +33,79 @@ jobs:
           client-id: ${{ secrets.TEST_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.TEST_GITHUB_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
           permission-actions: read
+          permission-checks: read
           permission-contents: write
           permission-pull-requests: write
-          permission-checks: read
           permission-statuses: read
 
       - name: Check out the base branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
           ref: main
-          token: ${{ steps.app-token.outputs.token }}
-          persist-credentials: true
-          fetch-depth: 0
 
-      - name: Write a random value to test.txt and push the test branch
+      - name: Create GitHub App commit and test branch
         id: branch
         shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
 
-          branch="$TEST_BRANCH"
-          git fetch origin "$BASE_BRANCH"
-          git checkout -B "$branch" "origin/$BASE_BRANCH"
-
+          BRANCH_NAME="${TEST_BRANCH_PREFIX}-$(date +%Y%m%d-%H%M%S)"
           openssl rand -hex 16 > test.txt
-          git add test.txt
-          git -c user.name='github-actions[bot]' \
-            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-            commit -m 'chore(ci): update test marker'
-          git push --set-upstream origin "$branch"
+          git add --all
 
-          echo "name=$branch" >> "$GITHUB_OUTPUT"
+          PARENT_SHA=$(git rev-parse HEAD)
+          BASE_TREE_SHA=$(git rev-parse HEAD^{tree})
+          TREE_ENTRIES=$(mktemp)
+          trap 'rm -f "$TREE_ENTRIES"' EXIT
+
+          while IFS= read -r -d '' FILE; do
+            MODE=$(git ls-files -s -- "$FILE" | awk '{print $1}')
+            jq -cn \
+              --arg path "$FILE" \
+              --arg mode "$MODE" \
+              --rawfile content "$FILE" \
+              '{path: $path, mode: $mode, type: "blob", content: $content}' \
+              >> "$TREE_ENTRIES"
+          done < <(git diff --cached --no-renames --name-only --diff-filter=ACMRTUXB -z)
+
+          while IFS= read -r -d '' FILE; do
+            jq -cn --arg path "$FILE" '{path: $path, sha: null}' >> "$TREE_ENTRIES"
+          done < <(git diff --cached --no-renames --name-only --diff-filter=D -z)
+
+          TREE_SHA=$(jq -s \
+            --arg base_tree "$BASE_TREE_SHA" \
+            '{base_tree: $base_tree, tree: .}' \
+            "$TREE_ENTRIES" | gh api --method POST \
+              "/repos/${GITHUB_REPOSITORY}/git/trees" \
+              --input - \
+              --jq '.sha')
+
+          COMMIT_SHA=$(gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/git/commits" \
+            -f message='chore(ci): update test marker' \
+            -f tree="$TREE_SHA" \
+            -f "parents[]=${PARENT_SHA}" \
+            --jq '.sha')
+
+          VERIFIED=$(gh api \
+            "/repos/${GITHUB_REPOSITORY}/commits/${COMMIT_SHA}" \
+            --jq '.commit.verification.verified')
+
+          if [[ "$VERIFIED" != "true" ]]; then
+            echo "GitHub App commit is not verified: ${COMMIT_SHA}"
+            exit 1
+          fi
+
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/heads/${BRANCH_NAME}" \
+            -f sha="$COMMIT_SHA"
+
+          echo "name=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Create a pull request
         id: pull_request
@@ -71,30 +116,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          pr_url="$(gh pr create \
+          PR_URL=$(gh pr create \
             --repo "$GITHUB_REPOSITORY" \
             --base "$BASE_BRANCH" \
             --head "$HEAD_BRANCH" \
-            --title 'chore(ci): verify PR checks watcher' \
-            --body 'Created by the PR checks watcher verification workflow.')"
+            --title "chore(ci): verify PR checks watcher $(date +%Y%m%d-%H%M%S)" \
+            --body 'Created by the PR checks watcher verification workflow.')
 
-          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+          echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for required checks
+      - name: Wait for Required Pull Request Checks
         shell: bash
         env:
           PR_URL: ${{ steps.pull_request.outputs.url }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
-          sleep 30
+          sleep 10 # Wait until required checks are available for evaluation.
           gh pr checks "$PR_URL" --repo "$GITHUB_REPOSITORY" --required --watch --interval 5
 
-      - name: Merge after required checks pass
+      - name: Merge Pull Request
         shell: bash
         env:
           PR_URL: ${{ steps.pull_request.outputs.url }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          set -euo pipefail
-          gh pr merge "$PR_URL" --merge
+          gh pr merge "$PR_URL" --merge --admin
+          echo "Merged pull request: ${PR_URL}" >> "$GITHUB_STEP_SUMMARY"

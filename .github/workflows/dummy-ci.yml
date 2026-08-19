@@ -14,7 +14,7 @@ jobs:
 
     steps:
       - name: Simulate a long-running CI check
-        run: sleep 1
+        run: sleep 30
 
       - name: Report success
         run: echo "Dummy CI completed successfully."
