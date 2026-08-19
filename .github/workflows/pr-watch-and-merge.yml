@@ -141,5 +141,5 @@ jobs:
           PR_URL: ${{ steps.pull_request.outputs.url }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          gh pr merge "$PR_URL" --merge
+          gh pr merge "$PR_URL" --merge --admin
           echo "Merged pull request: ${PR_URL}" >> "$GITHUB_STEP_SUMMARY"
