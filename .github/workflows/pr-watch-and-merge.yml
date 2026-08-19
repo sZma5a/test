@@ -29,6 +29,7 @@ jobs:
           client-id: ${{ secrets.TEST_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.TEST_GITHUB_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          permission-actions: read
           permission-contents: write
           permission-pull-requests: write
           permission-checks: read
