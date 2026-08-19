@@ -2,6 +2,7 @@ name: Create PR, watch checks, and merge
 
 on:
   push:
+    # Limit push-triggered runs to workflow changes to avoid a merge loop.
     paths:
       - .github/workflows/pr-watch-and-merge.yml
   workflow_dispatch:
